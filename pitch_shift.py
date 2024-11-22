@@ -9,6 +9,7 @@ import pyworld as pw
 import pyrubberband as pyrb
 import subprocess
 import tempfile
+import time
 
 
 
@@ -199,14 +200,21 @@ def pitch_shift_chord(input_path, output_path, scale_type='major', chord_name='I
 
 
 
-def make_doubling(input_path, output_path):
+def make_doubling(input_path, output_path, seed=None):
     """
     입력된 WAV 파일의 더블링을 생성하는 함수
     
     Args:
         input_path: 입력 WAV 파일 경로
         output_path: 출력 WAV 파일 경로
+        seed: 랜덤 시드 (None이면 현재 시간 기반으로 생성)
     """
+    # 랜덤 시드 설정
+    if seed is None:
+        seed = int(time.time() * 1000) % 10000
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    
     model = WaveUNet().to('cpu')
     model.load_state_dict(torch.load("./vocal_waveunet_model_all_songs.pth", map_location='cpu', weights_only=True))
     model.eval()

@@ -13,6 +13,8 @@ import librosa
 import uuid
 import subprocess
 import pyworld as pw
+import time
+import numpy as np
 
 def create_zip_file(files_dict):
     """
@@ -87,12 +89,17 @@ def main():
                         f.write(uploaded_file.getbuffer())
                     
                     with st.spinner("더블링 생성 중..."):
-                        # 두 개의 더블링 생성
                         double1_path = os.path.join(output_dir, f"double1_{original_filename}")
                         double2_path = os.path.join(output_dir, f"double2_{original_filename}")
                         
-                        make_doubling(temp_input_path, double1_path)
-                        make_doubling(temp_input_path, double2_path)
+                        # 첫 번째 시드만 생성
+                        seed1 = np.random.randint(0, 1000000)
+                        
+                        # 첫 번째 더블링 생성
+                        make_doubling(temp_input_path, double1_path, seed=seed1)
+                        
+                        # 두 번째 더블링은 첫 번째 더블링을 입력으로 사용
+                        make_doubling(double1_path, double2_path, seed=seed1+1)
                         
                         # 원본과 더블링들을 합치기
                         original, sr = librosa.load(temp_input_path, sr=None)
