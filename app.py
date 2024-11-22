@@ -12,6 +12,7 @@ import io
 import librosa
 import uuid
 import subprocess
+import pyworld as pw
 
 def create_zip_file(files_dict):
     """
@@ -176,57 +177,40 @@ def main():
             
             # 코러스 생성 1
             st.markdown("#### 코러스 생성 1")
-            st.markdown("*음 변환*")
+            st.markdown("*사람과 비슷한 목소리가 나지만, 갑자기 크게 부르는 구간에서는 깨지는 현상이 있음.(해당 현상 발생 시, EQ나 컴프레서를 적용한 input을 사용해보세요.)*")
             if st.button(f"{chord_name} 코러스 생성", key="chorus_btn1"):
                 try:
-                    # 코러스 1용 디렉토리
-                    output_dir = "./output_wavs/chorus1_parts"
-                    os.makedirs(output_dir, exist_ok=True)
-                    
-                    # 기존 파일들 모두 삭제
-                    for f in os.listdir(output_dir):
-                        if f.endswith('.wav'):
-                            os.remove(os.path.join(output_dir, f))
+                    # 임시 디렉토리 생성
+                    temp_dir = os.path.join("./temp_output", str(uuid.uuid4()))
+                    os.makedirs(temp_dir, exist_ok=True)
                     
                     # 업로드된 파일을 임시 저장
                     original_filename = uploaded_file.name
-                    temp_input_path = os.path.join(output_dir, original_filename)
+                    temp_input_path = os.path.join(temp_dir, original_filename)
                     with open(temp_input_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
                     
+                    # 원본 파일의 샘플레이트 읽기
+                    y_original, sr = librosa.load(temp_input_path, sr=None)
+                    
                     with st.spinner(f"{chord_name} 코러스를 생성하는 중..."):
-                        # 코드 인터벌 가져오기
-                        chord_intervals = get_chord_intervals(scale_type)
-                        intervals = chord_intervals[chord_name]
+                        # pitch_shift_chord 함수 호출 및 결과 파일 목록 받기
+                        generated_files = pitch_shift_chord(temp_input_path, temp_dir, scale_type, chord_name)
                         
-                        # 오디오 로드
-                        y, sr = librosa.load(temp_input_path, sr=None)
+                        if not generated_files:
+                            st.error("코러스 파일 생성에 실패했습니다.")
+                            return
                         
-                        # 각 인터벌에 대해 포치 시프트 적용
-                        files_dict = {original_filename: temp_input_path}  # 원본 파일 추가
-                        shifted_signals = [y]  # 믹싱을 위한 신호 리스트 (원본 포함)
+                        # 결과 파일들 처리
+                        files_dict = {original_filename: temp_input_path}  # 원본 파일
+                        shifted_signals = [y_original]  # 원본 신호
                         
-                        for semitones in intervals:
-                            # 각 인터벌마다 개별적으로 피치 시프트 적용
-                            output_name = f"shifted_{scale_type}_{chord_name}_{'+' if semitones >= 0 else ''}{semitones}.wav"
-                            output_path = os.path.join(output_dir, output_name)
-                            
-                            # soundstretch로 피치 시프트
-                            cmd = ['soundstretch', temp_input_path, output_path, 
-                                  f'-pitch={semitones}', '-tempo=0', '-rate=0', 
-                                  '-speech', '-sequence=30', '-naa']
-                            
-                            subprocess.run(cmd, check=True)
-                            
-                            # 생성된 파일 로드 및 정규화
-                            y_shifted, sr = librosa.load(output_path, sr=None)
-                            y_shifted = librosa.util.normalize(y_shifted)
-                            
-                            # 결과 저장
-                            sf.write(output_path, y_shifted, sr)
-                            
+                        # 생성된 각 파일 처리
+                        for file_path in generated_files:
+                            file_name = os.path.basename(file_path)
+                            files_dict[file_name] = file_path
+                            y_shifted, _ = librosa.load(file_path, sr=sr)
                             shifted_signals.append(y_shifted)
-                            files_dict[output_name] = output_path
                         
                         # 모든 신호를 가장 짧은 길이에 맞추기
                         min_length = min(len(signal) for signal in shifted_signals)
@@ -241,15 +225,18 @@ def main():
                         mixed = librosa.util.normalize(mixed)
                         
                         # 믹스 파일 저장
-                        mixed_path = os.path.join(output_dir, f"mixed_{original_filename}")
+                        mixed_path = os.path.join(temp_dir, f"mixed_{original_filename}")
                         sf.write(mixed_path, mixed, sr)
                         files_dict['mixed'] = mixed_path
                         
                         st.session_state.chorus_results = files_dict
                         st.success(f"{chord_name} 코러스 생성 완료!")
-                    
+                
                 except Exception as e:
                     st.error(f"에러 발생: {str(e)}")
+                    if os.path.exists(temp_dir):
+                        import shutil
+                        shutil.rmtree(temp_dir)
             
             # 코러스 1 결과 표시
             if st.session_state.chorus_results:
@@ -268,8 +255,8 @@ def main():
             
             # 코러스 생성 2
             st.markdown("#### 코러스 생성 2")
-            st.markdown("*포먼트 보존 기법 사용*")
-            if st.button(f"{chord_name} 코러스 생성 (포먼트 보존)", key="chorus_btn2"):
+            st.markdown("*좀 더 기계음이지만 깨지는 현상이 없음*")
+            if st.button(f"{chord_name} 코러스 생성", key="chorus_btn2"):
                 try:
                     # 코러스 2용 디렉토리
                     output_dir = "./output_wavs/chorus2_parts"
@@ -294,19 +281,23 @@ def main():
                         # 오디오 로드
                         y, sr = librosa.load(temp_input_path, sr=None)
                         
-                        # 각 인터벌에 대해 포먼트 보존 피치 시프트 적용
-                        files_dict = {original_filename: temp_input_path}  # 원본 파일 추가
-                        shifted_signals = [y]  # 믹싱을 위한 신호 리스트 (원본 포함)
+                        # 원본 더블링 생성
+                        doubled_original_path = os.path.join(output_dir, f"doubled_{original_filename}")
+                        make_doubling(temp_input_path, doubled_original_path)
+                        y_doubled_original, sr = librosa.load(doubled_original_path, sr=None)
+                        
+                        files_dict = {original_filename: doubled_original_path}  # 더블링된 원본 파일 추가
+                        shifted_signals = [y_doubled_original]  # 믹싱을 위한 신호 리스트 (더블링된 원본 포함)
                         
                         for semitones in intervals:
-                            output_name = f"formant_preserved_{scale_type}_{chord_name}_{'+' if semitones >= 0 else ''}{semitones}.wav"
-                            output_path = os.path.join(output_dir, output_name)
-                            
-                            # 포먼트 보존 피치 시프트 적용
+                            # 각 음정마다 새로운 더블링 생성 후 피치 시프트
                             y_shifted = pitch_shift_with_formant_preservation(y, sr, semitones)
                             
                             # 결과 저장
+                            output_name = f"formant_preserved_{scale_type}_{chord_name}_{'+' if semitones >= 0 else ''}{semitones}.wav"
+                            output_path = os.path.join(output_dir, output_name)
                             sf.write(output_path, y_shifted, sr)
+                            
                             files_dict[output_name] = output_path
                             shifted_signals.append(y_shifted)
                         
@@ -315,7 +306,7 @@ def main():
                         shifted_signals = [signal[:min_length] for signal in shifted_signals]
                         
                         # 믹싱 (원본 100% + 각 코러스 20%)
-                        mixed = shifted_signals[0]  # 원본
+                        mixed = shifted_signals[0]  # 더블링된 원본
                         for signal in shifted_signals[1:]:
                             mixed += 0.2 * signal
                         
@@ -335,7 +326,7 @@ def main():
             
             # 코러스 2 결과 표시
             if st.session_state.formant_chorus_results:
-                st.write("생성된 코러스 파일들 (포먼트 보존):")
+                st.write("생성된 코러스 파일들:")
                 for file_name, file_path in st.session_state.formant_chorus_results.items():
                     if file_name != 'mixed':  # 개별 파일들 먼저 표시
                         st.write(f"파일명: {file_name}")

@@ -1,12 +1,14 @@
 import librosa
 import os
-import subprocess
 import numpy as np
 import scipy.io.wavfile as wavfile
 import torch
 import soundfile as sf
 import torch.nn as nn
 import pyworld as pw
+import pyrubberband as pyrb
+import subprocess
+import tempfile
 
 
 
@@ -98,76 +100,103 @@ def get_chord_intervals(scale_type='major'):
             'V7':   [-5, -1, 2, 5],    # 딸림7화음 (dominant7)
         }
 
-def pitch_shift_chord(input_path, output_dir, scale_type='major', chord_name='I'):
+import os
+import librosa
+import soundfile as sf
+import numpy as np
+import pyworld as pw
+import torch
+
+def pitch_shift_with_formants(result_delayed, sr, semitones):
+    """포먼트를 보존하면서 피치 시프팅"""
+
+    if semitones == 0:
+        return result_delayed
+
+    # 데이터를 64비트 float로 변환
+    result_delayed = result_delayed.astype(np.float64)
+
+    # World Vocoder를 이용해 음성을 분석
+    _f0, timeaxis = pw.harvest(result_delayed, sr)  # 피치 추출
+    sp = pw.cheaptrick(result_delayed, _f0, timeaxis, sr)  # 스펙트럼 추출
+    ap = pw.d4c(result_delayed, _f0, timeaxis, sr)  # 에어리니스 추출
+
+    # 피치 변경
+    f0_shifted = _f0 * (2 ** (semitones / 12.0))  # 세미톤 단위로 피치 변경
+
+    # World Vocoder를 사용하여 재합성
+    y_shifted = pw.synthesize(f0_shifted, sp, ap, sr)
+    return y_shifted
+
+def pitch_shift_chord(input_path, output_path, scale_type='major', chord_name='I'):
+    # output_dir을 output_path의 디렉토리로 설정
+    output_dir = os.path.dirname(output_path)
     os.makedirs(output_dir, exist_ok=True)
     
-    # chord_intervals 가져오기 추가
+    # 생성된 파일들의 경로를 저장할 리스트
+    generated_files = []
+    
+    # chord_intervals 가져오기
     chord_intervals = get_chord_intervals(scale_type)
     
-    for semitones in chord_intervals[chord_name]:
-        # 각 음정마다 새로운 더블링 생성
-        random_seed = np.random.randint(0, 10000)
-        torch.manual_seed(random_seed)
-        
-        # 임시 더블링 파일 경로
-        doubled_path = os.path.join(output_dir, f"doubled_temp_{semitones}.wav")
-        
-        # WaveUNet으로 더블링 생성
-        model = WaveUNet().to('cpu')
-        model.load_state_dict(torch.load("./vocal_waveunet_model_all_songs.pth", map_location='cpu'))
-        model.eval()
-        
-        # 오디오 로드 및 더블링 처리
-        original, sr = librosa.load(input_path, sr=None)
-        original_tensor = torch.from_numpy(original).float().unsqueeze(0).unsqueeze(0)
-        
-        with torch.no_grad():
-            modified = model(original_tensor).squeeze().numpy()
-        
-        # 위상 처리
-        n_fft = 2048
-        hop_length = 512
-        stft_original = librosa.stft(original, n_fft=n_fft, hop_length=hop_length)
-        mag_original, phase_original = librosa.magphase(stft_original)
-        
-        stft_modified = librosa.stft(modified, n_fft=n_fft, hop_length=hop_length)
-        mag_modified, phase_modified = librosa.magphase(stft_modified)
-        
-        mag_result = mag_original
-        phase_result = phase_modified
-        
-        result = librosa.istft(mag_result * phase_result, hop_length=hop_length)
-        
-        # 시간 지연 추가 (10ms)
-        delay_samples = int(0.01 * sr)
-        result_delayed = np.pad(result, (delay_samples, 0), mode='constant')[:len(result)]
-        
-        # 더블링된 결과 저장
-        sf.write(doubled_path, result_delayed, sr)
-        
-        # 생성된 더블링에 대해 피치 시프트 적용
-        base_filename = os.path.splitext(os.path.basename(input_path))[0]
-        output_name = f"{base_filename}_doubled_{scale_type}_{chord_name}_{'+' if semitones >= 0 else ''}{semitones}.wav"
-        output_path = os.path.join(output_dir, output_name)
-        
-        # soundstretch로 피치 시프트
-        cmd = ['soundstretch', doubled_path, output_path, '-pitch=' + str(semitones), '-tempo=0', '-rate=0', '-speech', '-sequence=30', '-naa']
-        
-        try:
-            subprocess.run(cmd, check=True)
-            y, sr = librosa.load(output_path, sr=None)
-            y = librosa.util.normalize(y)
-            y_int = np.int16(y * 32767)
-            wavfile.write(output_path, sr, y_int)
-            print(f'생성 완료: {output_name} (피치 시프트: {semitones})')
+    try:
+        for semitones in chord_intervals[chord_name]:
+            # 각 음정마다 새로운 더블링 생성
+            random_seed = np.random.randint(0, 10000)
+            torch.manual_seed(random_seed)
             
-        except Exception as e:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            raise Exception(f"처리 실패: {str(e)}")
+            # 임시 더블링 파일 경로
+            doubled_path = os.path.join(output_dir, f"doubled_temp_{semitones}.wav")
+            
+            # make_doubling 함수를 사용하여 더블링 생성
+            make_doubling(input_path, doubled_path)
+            
+            # 더블링된 파일 로드
+            result_delayed, sr = librosa.load(doubled_path, sr=None)
+
+            # max_val = 0.8
+            # result_delayed = np.clip(result_delayed, -max_val, max_val)
+
+            # # 스무딩 필터 적용
+            # window_size = 5  # 윈도우 크기 설정
+            # result_delayed = np.convolve(result_delayed, np.ones(window_size)/window_size, mode='same')
+
+            # soundstretch 대신 World Vocoder로 피치 시프트
+            base_filename = os.path.splitext(os.path.basename(input_path))[0]
+            output_name = f"{base_filename}_doubled_{scale_type}_{chord_name}_{'+' if semitones >= 0 else ''}{semitones}.wav"
+            output_path = os.path.join(output_dir, output_name)
+            
+            try:
+                # World Vocoder 기반 피치 시프트
+                y_shifted = pitch_shift_with_formants(result_delayed, sr, semitones)
+                
+                # 정규화
+                y_shifted = librosa.util.normalize(y_shifted)
+                
+                # 결과 저장
+                sf.write(output_path, y_shifted, sr)
+                print(f'생성 완료: {output_name} (피치 시프트: {semitones})')
+                
+                # 생성된 파일 경로 가
+                generated_files.append(output_path)
+                
+            except Exception as e:
+                print(f"개별 파일 처리 실패: {str(e)}")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                continue
+            
+            # 임시 파일 삭제
+            if os.path.exists(doubled_path):
+                os.remove(doubled_path)
         
-        # 임시 파일 삭제
-        os.remove(doubled_path)
+        return generated_files  # 생성된 파일 목록 반환
+        
+    except Exception as e:
+        print(f"전체 처리 실패: {str(e)}")
+        return []
+
+
 
 
 def make_doubling(input_path, output_path):
@@ -220,18 +249,44 @@ def make_doubling(input_path, output_path):
 
 def pitch_shift_with_formant_preservation(y, sr, semitones):
     """포먼트를 보존하면서 피치 시프트를 수행하는 함수"""
-    # WORLD 분석
-    _f0, t = pw.dio(y.astype(np.float64), sr)
-    f0 = pw.stonemask(y.astype(np.float64), _f0, t, sr)
-    sp = pw.cheaptrick(y.astype(np.float64), f0, t, sr)
-    ap = pw.d4c(y.astype(np.float64), f0, t, sr)
-    
-    # 피치 변경
-    modified_f0 = f0 * 2**(semitones/12)
-    
-    # 합성
-    y_shifted = pw.synthesize(modified_f0, sp, ap, sr)
-    return y_shifted
+    try:
+        # 임시 파일 생성을 위한 경로 설정
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_input, \
+             tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_doubled:
+            
+            # 입력 신호를 임시 파일로 저장
+            sf.write(temp_input.name, y, sr)
+            
+            # 더블링 생성
+            make_doubling(temp_input.name, temp_doubled.name)
+            
+            # 더블링된 파일 로드
+            y_doubled, sr = librosa.load(temp_doubled.name, sr=None)
+            
+            # 피치 시프트 범위 제한
+            semitones = np.clip(semitones, -12, 12)
+            
+            try:
+                # pyrubberband를 사용한 피치 시프트
+                y_shifted = pyrb.pitch_shift(y_doubled, sr, n_steps=semitones)
+            except Exception as e:
+                print(f"pyrubberband 처리 중 오류, librosa로 대체: {str(e)}")
+                y_shifted = librosa.effects.pitch_shift(y=y_doubled, sr=sr, n_steps=semitones)
+            
+            # 볼륨 정규화
+            y_shifted = librosa.util.normalize(y_shifted)
+            
+            # 임시 파일 삭제
+            os.unlink(temp_input.name)
+            os.unlink(temp_doubled.name)
+            
+            return y_shifted
+            
+    except Exception as e:
+        print(f"피치 시프트 처리 중 오류 발생: {str(e)}")
+        # 에러 발생 시 원본 신호에 대해 librosa의 pitch_shift 적용
+        y_shifted = librosa.effects.pitch_shift(y=y, sr=sr, n_steps=semitones)
+        return y_shifted
 
 
 def test_formant_pitch_shift():
@@ -275,21 +330,15 @@ def test_formant_pitch_shift():
 
 
 if __name__ == "__main__":
-    test_formant_pitch_shift()
-    # input_path = "./dataset/song_1/Male Pop Rock Vocal C12.wav"
-    # output_dir = "./output_wavs/chord_parts"
+    #test_formant_pitch_shift()
+    input_path = "./dataset/song_1/Male Pop Rock Vocal C12.wav"
+    output_dir = "./output_wavs/chord_parts5"
     
-    # # 메이저 코드 진행에 필요한 주요 화음들 생성
-    # chords = ['I', 'ii', 'iii', 'IV', 'V', 'V7', 'vi']
+    # 메이저 코드 진행에 필요한 주요 화음들 생성
+    chords = ['I', 'ii', 'iii', 'IV', 'V', 'V7', 'vi']
     
-    # try:
-    #     for chord in chords:
-    #         print(f"\n{chord} 화음 생성 중...")
-    #         pitch_shift_chord(input_path, output_dir, scale_type='major', chord_name=chord)
+
+    pitch_shift_chord(input_path, output_dir, scale_type='major', chord_name='vi')
             
-    #     print("\n모든 화음 생성 완료!")
-        
-    # except Exception as e:
-    #     print(f"에러 발생: {str(e)}")
 
 

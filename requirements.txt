@@ -6,4 +6,4 @@ librosa
 soundfile
 torch
 pyworld
-soundstretch
+pyrubberband
