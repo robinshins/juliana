@@ -244,13 +244,16 @@ def make_doubling(input_path, output_path, seed=None):
     # 6. ISTFT를 통해 최종 오디오 생성
     result = librosa.istft(mag_result * phase_result, hop_length=hop_length)
     
-    # # 7. 랜덤 딜레이 추가 (5-15ms 사이)
-    # delay_ms = np.random.uniform(5, 15)  # 5-15ms 사이의 랜덤 값
-    # delay_samples = int(delay_ms * sr / 1000)  # ms를 샘플 수로 변환
-    # result_delayed = np.pad(result, (delay_samples, 0), mode='constant')[:-delay_samples]
+    # 랜덤한 미세 딜레이 생성 (5-15ms 사이)
+    delay_ms = np.random.uniform(5, 15)
+    delay_samples = int((delay_ms / 1000) * sr)
+    
+    # 딜레이된 신호 생성
+    result_delayed = np.zeros(len(result) + delay_samples)
+    result_delayed[delay_samples:] = result
     
     # 8. 결과 저장
-    sf.write(output_path, result, sr)
+    sf.write(output_path, result_delayed, sr)
     
     #print(f"새로운 오디오 파일이 생성되었습니다: {output_path} (딜레이: {delay_ms:.1f}ms)")
 

@@ -249,14 +249,22 @@ def main():
             if st.session_state.chorus_results:
                 st.write("생성된 코러스 파일들:")
                 for file_name, file_path in st.session_state.chorus_results.items():
-                    if file_name != 'mixed':  # 개별 파일들 먼저 표시
+                    if file_name != 'mixed':
                         st.write(f"파일명: {file_name}")
                         st.audio(file_path, format='audio/wav')
                 
-                # 믹스 파일 표시
                 if 'mixed' in st.session_state.chorus_results:
                     st.write("모든 트랙 믹스:")
                     st.audio(st.session_state.chorus_results['mixed'], format='audio/wav')
+                
+                # ZIP 다운로드 버튼 추가
+                zip_buffer = create_zip_file(st.session_state.chorus_results)
+                st.download_button(
+                    label="모든 코러스 파일 다운로드 (ZIP)",
+                    data=zip_buffer.getvalue(),
+                    file_name="chorus_files.zip",
+                    mime="application/zip"
+                )
             
             st.markdown("---")
             
@@ -335,14 +343,22 @@ def main():
             if st.session_state.formant_chorus_results:
                 st.write("생성된 코러스 파일들:")
                 for file_name, file_path in st.session_state.formant_chorus_results.items():
-                    if file_name != 'mixed':  # 개별 파일들 먼저 표시
+                    if file_name != 'mixed':
                         st.write(f"파일명: {file_name}")
                         st.audio(file_path, format='audio/wav')
                 
-                # 믹스 파일 표시
                 if 'mixed' in st.session_state.formant_chorus_results:
                     st.write("모든 트랙 믹스:")
                     st.audio(st.session_state.formant_chorus_results['mixed'], format='audio/wav')
+                
+                # ZIP 다운로드 버튼 추가
+                zip_buffer = create_zip_file(st.session_state.formant_chorus_results)
+                st.download_button(
+                    label="모든 코러스 파일 다운로드 (ZIP)",
+                    data=zip_buffer.getvalue(),
+                    file_name="formant_chorus_files.zip",
+                    mime="application/zip"
+                )
     
     else:
         st.info("👆 먼저 WAV 파일을 업로드해주세요. 최상의 결과를 위해 깨끗한 녹음 파일을 사용하는 것을 추천드립니다.")
